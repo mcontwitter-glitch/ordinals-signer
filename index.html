@@ -1,0 +1,77 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ordinals bridge · go-live signer</title>
+<style>
+:root{--bg:#000;--card:#0d0d0d;--line:#222;--fg:#eaeaea;--mut:#8a8a8a;--acc:#f5c542;--ok:#4ade80;--bad:#f87171}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:760px;margin:0 auto;padding:18px 14px 60px}h1{font-size:20px;margin:6px 0}h2{font-size:16px;margin:0 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin:14px 0}.card.off{opacity:.45}
+.mut{color:var(--mut);font-size:13px}code,.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;word-break:break-all}
+button{background:var(--acc);color:#000;border:0;border-radius:9px;padding:11px 16px;font-weight:700;font-size:15px;cursor:pointer;margin:6px 6px 0 0}
+button:disabled{background:#333;color:#777;cursor:not-allowed}button.sec{background:#1d1d1d;color:var(--fg);border:1px solid #333}
+.ok{color:var(--ok)}.bad{color:var(--bad)}table{width:100%;border-collapse:collapse}td{padding:3px 0;vertical-align:top}td:first-child{color:var(--mut);width:110px}
+details{margin-top:6px}a{color:var(--acc)}.note{border-left:3px solid var(--acc);padding:6px 10px;background:#111;font-size:13px}
+</style></head><body><main>
+<h1>Ordinals bridge · go-live signer</h1>
+<p class="mut">Deploy OrdinalsSink + A1/A2 on Arbitrum One, then B1 on Abstract. Every transaction is signed and sent by <b>your wallet</b>; this page holds no keys. B2 (setPeer) is intentionally <b>not</b> here.</p>
+<div class="note">On a phone, open this page inside the <b>MetaMask app browser</b> (MetaMask → Browser tab → paste URL). Desktop: any injected EIP-1193 wallet (MetaMask etc.).</div>
+<div class="card" id="conn"><h2>Wallet</h2><div id="connInfo" class="mut">Not connected.</div><button id="btnConnect">Connect wallet</button><button class="sec" id="btnReset">Reset saved progress</button></div>
+<div id="steps"></div>
+<p class="mut">Progress is saved in this browser (localStorage) so a reload resumes.</p>
+</main>
+<script src="bytecode.js"></script><script src="encode.js"></script>
+<script>
+const E=GoLiveEnc,C=E.C,OWNER=C.OWNER.toLowerCase();
+const CHAINS={arb:{id:42161,hex:'0xa4b1',name:'Arbitrum One',rpc:'https://arb1.arbitrum.io/rpc',exp:'https://arbiscan.io'},
+ abs:{id:2741,hex:'0xab5',name:'Abstract',rpc:'https://api.mainnet.abs.xyz',exp:'https://abscan.org'}};
+const KEY='ordinalsGoLive.v1';let S=JSON.parse(localStorage.getItem(KEY)||'{}');const save=()=>localStorage.setItem(KEY,JSON.stringify(S));
+const eth=window.ethereum;let account=null;
+const $=id=>document.getElementById(id);const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+async function rpc(chain,method,params){const r=await fetch(CHAINS[chain].rpc,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});const j=await r.json();if(j.error)throw Error(j.error.message+(j.error.data?' '+JSON.stringify(j.error.data):''));return j.result;}
+const fmtEth=w=>(Number(w)/1e18).toFixed(8);
+const STEPS=[
+ {k:'deploy',chain:'arb',title:'1 · Deploy OrdinalsSink',fn:'constructor(endpoint 0x1a44…728c, srcEid 30324, vault 0xe81D…99e5, delegate 0xb19F…96b1)',
+  to:()=>null,data:()=>window.SINK_BYTECODE+E.constructorArgs()},
+ {k:'A1',chain:'arb',title:'2 · A1 setReceiveLibrary',fn:'setReceiveLibrary(sink, 30324, ReceiveUln302 0x7B9E…05e6, 0)',to:()=>C.ENDPOINT,data:()=>E.A1(S.sink)},
+ {k:'A2',chain:'arb',title:'3 · A2 setConfig (receive ULN)',fn:'setConfig(sink, ReceiveUln302, [eid 30324, type 2: 20 confirmations, 1 required DVN = LZ Labs 0x2f55…6416])',to:()=>C.ENDPOINT,data:()=>E.A2(S.sink)},
+ {k:'B1',chain:'abs',title:'4 · B1 setSendConfig (vault, Abstract)',fn:'setSendConfig(SendUln302 0x166C…29a1, 30110, 20, DVN 0xF4DA…7112, 10000, executor 0x643E…58A5)',to:()=>C.VAULT,data:()=>E.B1()}];
+function enabled(i){if(!account||account!==OWNER)return false;for(let j=0;j<i;j++)if(!S[STEPS[j].k]?.confirmed)return false;if(i===0)return true;return !!S.sinkVerified;}
+function render(){
+ $('connInfo').innerHTML=!eth?'<span class="bad">No injected wallet found. Open in MetaMask (app browser on mobile).</span>':
+  account?(account===OWNER?`<span class="ok">Connected: ${account}</span>`:`<span class="bad">Connected ${account} — wrong account. Switch to ${C.OWNER}.</span>`):'Not connected.';
+ $('steps').innerHTML=STEPS.map((s,i)=>{const st=S[s.k]||{},on=enabled(i),ch=CHAINS[s.chain];let data='';try{data=(i===0||S.sink)?s.data():''}catch(e){}
+  return `<div class="card ${on||st.confirmed?'':'off'}"><h2>${s.title} ${st.confirmed?'<span class="ok">✓ confirmed</span>':''}</h2><table>
+  <tr><td>Chain</td><td>${ch.name} (${ch.id})</td></tr><tr><td>Target</td><td class="mono">${s.to()?s.to():'(contract creation)'}</td></tr>
+  <tr><td>Function</td><td>${esc(s.fn)}</td></tr><tr><td>From</td><td class="mono">${C.OWNER}</td></tr>
+  <tr><td>Simulation</td><td id="sim-${s.k}">${st.sim||'<span class="mut">runs when enabled</span>'}</td></tr></table>
+  ${data?`<details><summary class="mut">Calldata (${(data.length-2)/2} bytes)</summary><div class="mono">${data.length>600?data.slice(0,300)+'…'+data.slice(-300):data}</div></details>`:''}
+  ${st.hash?`<p>Tx: <a class="mono" target="_blank" href="${ch.exp}/tx/${st.hash}">${st.hash}</a> ${st.confirmed?'':'<span class="mut">(waiting for receipt…)</span>'}</p>`:''}
+  ${s.k==='deploy'&&S.sink?`<p>Sink: <span class="mono">${S.sink}</span> <button class="sec" onclick="navigator.clipboard.writeText('${S.sink}')">Copy</button> <a target="_blank" href="${ch.exp}/address/${S.sink}">explorer</a><br>${S.sinkVerified?'<span class="ok">srcEid() == 30324 ✓</span>':'<span class="bad">srcEid not yet verified</span> <button class="sec" onclick="verifySink()">Verify</button>'}</p>`:''}
+  ${st.err?`<p class="bad">${esc(st.err)}</p>`:''}
+  ${st.confirmed?'':`<button ${on&&!st.hash?'':'disabled'} onclick="send(${i})">Sign &amp; send ${s.k}</button>${st.hash&&!st.confirmed?`<button class="sec" onclick="watch(${i})">Re-check receipt</button>`:''}`}</div>`}).join('');
+ STEPS.forEach((s,i)=>{if(enabled(i)&&!S[s.k]?.confirmed&&!S[s.k]?.hash&&!simDone[s.k])simulate(i);});
+}
+const simDone={};
+async function simulate(i){const s=STEPS[i];simDone[s.k]=1;const tx={from:C.OWNER,data:s.data()};if(s.to())tx.to=s.to();
+ let out;try{if(tx.to)await rpc(s.chain,'eth_call',[tx,'latest']);const [g,p,b]=await Promise.all([rpc(s.chain,'eth_estimateGas',[tx]),rpc(s.chain,'eth_gasPrice',[]),rpc(s.chain,'eth_getBalance',[C.OWNER,'latest'])]);
+  const cost=BigInt(g)*BigInt(p);out=`<span class="ok">OK</span> · gas ${BigInt(g)} · price ${(Number(BigInt(p))/1e9).toFixed(4)} gwei · est. cost ≈ ${fmtEth(cost)} ETH · balance ${fmtEth(BigInt(b))} ETH${BigInt(b)<cost?' <span class="bad">INSUFFICIENT</span>':''}`;S[s.k]={...(S[s.k]||{}),gas:g,ok:true};}
+ catch(e){out=`<span class="bad">Simulation failed: ${esc(e.message)}</span>`;S[s.k]={...(S[s.k]||{}),ok:false};}
+ S[s.k].sim=out;save();const el=$('sim-'+s.k);if(el)el.innerHTML=out;}
+async function connect(){if(!eth)return render();const a=await eth.request({method:'eth_requestAccounts'});account=(a[0]||'').toLowerCase();render();}
+async function switchTo(chain){const c=CHAINS[chain];try{await eth.request({method:'wallet_switchEthereumChain',params:[{chainId:c.hex}]});}
+ catch(e){if(e.code===4902||e?.data?.originalError?.code===4902){await eth.request({method:'wallet_addEthereumChain',params:[{chainId:c.hex,chainName:c.name,nativeCurrency:{name:'Ether',symbol:'ETH',decimals:18},rpcUrls:[c.rpc],blockExplorerUrls:[c.exp]}]});}else throw e;}
+ const id=await eth.request({method:'eth_chainId'});if(parseInt(id,16)!==c.id)throw Error('Wallet is not on '+c.name);}
+async function send(i){const s=STEPS[i];S[s.k]={...(S[s.k]||{}),err:null};
+ try{const a=(await eth.request({method:'eth_requestAccounts'}))[0].toLowerCase();account=a;if(a!==OWNER)throw Error('Connected account is not '+C.OWNER);
+  await switchTo(s.chain);simDone[s.k]=0;await simulate(i);if(!S[s.k].ok)throw Error('Simulation failed; not sending.');
+  const tx={from:a,data:s.data(),gas:'0x'+(BigInt(S[s.k].gas)*13n/10n).toString(16)};if(s.to())tx.to=s.to();
+  const h=await eth.request({method:'eth_sendTransaction',params:[tx]});S[s.k].hash=h;save();render();await watch(i);}
+ catch(e){S[s.k].err=e.message||String(e);save();render();}}
+async function watch(i){const s=STEPS[i];const h=S[s.k].hash;for(let t=0;t<120;t++){const r=await rpc(s.chain,'eth_getTransactionReceipt',[h]).catch(()=>null);
+  if(r){if(r.status!=='0x1'){S[s.k].err='Transaction reverted (status '+r.status+'). Check the explorer.';delete S[s.k].hash;save();return render();}
+   if(s.k==='deploy'){S.sink=r.contractAddress;save();await verifySink();}S[s.k].confirmed=true;save();return render();}
+  await new Promise(r=>setTimeout(r,3000));}S[s.k].err='No receipt yet; press Re-check receipt.';save();render();}
+async function verifySink(){try{const r=await rpc('arb','eth_call',[{to:S.sink,data:'0x479cca5e'},'latest']);S.sinkVerified=BigInt(r)===30324n;if(!S.sinkVerified)S.deploy={...S.deploy,err:'srcEid() returned '+BigInt(r)};}catch(e){S.deploy={...S.deploy,err:'srcEid check failed: '+e.message};}save();render();}
+$('btnConnect').onclick=connect;$('btnReset').onclick=()=>{if(confirm('Clear saved progress? (does not undo on-chain txs)')){S={};save();location.reload();}};
+if(eth){eth.on?.('accountsChanged',a=>{account=(a[0]||'').toLowerCase();render();});eth.request({method:'eth_accounts'}).then(a=>{account=(a[0]||'').toLowerCase()||null;render();});}
+render();STEPS.forEach((s,i)=>{if(S[s.k]?.hash&&!S[s.k].confirmed)watch(i);});
+</script></body></html>
