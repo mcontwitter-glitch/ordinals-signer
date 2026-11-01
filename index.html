@@ -12,7 +12,7 @@ button:disabled{background:#333;color:#777;cursor:not-allowed}button.sec{backgro
 details{margin-top:6px}a{color:var(--acc)}.note{border-left:3px solid var(--acc);padding:6px 10px;background:#111;font-size:13px}
 </style></head><body><main>
 <h1>Ordinals bridge · go-live signer</h1>
-<p class="mut">Deploy OrdinalsSink + A1/A2 on Arbitrum One, then B1 on Abstract. Every transaction is signed and sent by <b>your wallet</b>; this page holds no keys. B2 (setPeer) is intentionally <b>not</b> here.</p>
+<p class="mut">Deploy OrdinalsSink + A1/A2 on Arbitrum One, then B1 and B2 on Abstract. Every transaction is signed and sent by <b>your wallet</b>; this page holds no keys. B2 (setPeer) turns the Ordinals route on — sign it last.</p>
 <div class="note">On a phone, open this page inside the <b>MetaMask app browser</b> (MetaMask → Browser tab → paste URL). Desktop: any injected EIP-1193 wallet (MetaMask etc.).</div>
 <div class="card" id="conn"><h2>Wallet</h2><div id="connInfo" class="mut">Not connected.</div><button id="btnConnect">Connect wallet</button><button class="sec" id="btnReset">Reset saved progress</button></div>
 <div id="steps"></div>
@@ -33,8 +33,15 @@ const STEPS=[
   to:()=>null,data:()=>window.SINK_BYTECODE+E.constructorArgs()},
  {k:'A1',chain:'arb',title:'2 · A1 setReceiveLibrary',fn:'setReceiveLibrary(sink, 30324, ReceiveUln302 0x7B9E…05e6, 0)',to:()=>C.ENDPOINT,data:()=>E.A1(S.sink)},
  {k:'A2',chain:'arb',title:'3 · A2 setConfig (receive ULN)',fn:'setConfig(sink, ReceiveUln302, [eid 30324, type 2: 20 confirmations, 1 required DVN = LZ Labs 0x2f55…6416])',to:()=>C.ENDPOINT,data:()=>E.A2(S.sink)},
- {k:'B1',chain:'abs',title:'4 · B1 setSendConfig (vault, Abstract)',fn:'setSendConfig(SendUln302 0x166C…29a1, 30110, 20, DVN 0xF4DA…7112, 10000, executor 0x643E…58A5)',to:()=>C.VAULT,data:()=>E.B1()}];
-function enabled(i){if(!account||account!==OWNER)return false;for(let j=0;j<i;j++)if(!S[STEPS[j].k]?.confirmed)return false;if(i===0)return true;return !!S.sinkVerified;}
+ {k:'B1',chain:'abs',title:'4 · B1 setSendConfig (vault, Abstract)',fn:'setSendConfig(SendUln302 0x166C…29a1, 30110, 20, DVN 0xF4DA…7112, 10000, executor 0x643E…58A5)',to:()=>C.VAULT,data:()=>E.B1()},
+ {k:'B2',chain:'abs',standalone:true,title:'5 · B2 setPeer (vault, Abstract) — goes live',fn:'setPeer(30110, bytes32(sink 0xAaB3…4622)). Pre-checks: vault owner == 0xb19F…96b1, peers(30110) == 0x0, sink srcEid() == 30324 on Arbitrum',to:()=>C.VAULT,data:()=>E.B2()}];
+async function preB2(){const pad=a=>'0x'+a.slice(2).toLowerCase().padStart(64,'0');let msg;
+ try{const [o,pr,se]=await Promise.all([rpc('abs','eth_call',[{to:C.VAULT,data:'0x8da5cb5b'},'latest']),rpc('abs','eth_call',[{to:C.VAULT,data:'0xbb0b6a53'+(30110).toString(16).padStart(64,'0')},'latest']),rpc('arb','eth_call',[{to:C.SINK,data:'0x479cca5e'},'latest'])]);
+  const ownerOk=o.toLowerCase()===pad(C.OWNER),peerZero=BigInt(pr)===0n,peerSet=pr.toLowerCase()===pad(C.SINK),sinkOk=BigInt(se)===30324n;
+  S.b2Pre=ownerOk&&peerZero&&sinkOk;if(peerSet)S.B2={...(S.B2||{}),confirmed:true};
+  msg=`owner ${ownerOk?'✓':'✗'} · peers(30110) ${peerSet?'already = sink ✓':peerZero?'= 0x0 ✓':'= '+pr+' ✗'} · sink srcEid ${sinkOk?'30324 ✓':'✗'}`;}
+ catch(e){S.b2Pre=false;msg='pre-check failed: '+e.message;}S.b2PreMsg=msg;save();render();}
+function enabled(i){if(!account||account!==OWNER)return false;if(STEPS[i].standalone)return !!S.b2Pre;for(let j=0;j<i;j++)if(!S[STEPS[j].k]?.confirmed)return false;if(i===0)return true;return !!S.sinkVerified;}
 function render(){
  $('connInfo').innerHTML=!eth?'<span class="bad">No injected wallet found. Open in MetaMask (app browser on mobile).</span>':
   account?(account===OWNER?`<span class="ok">Connected: ${account}</span>`:`<span class="bad">Connected ${account} — wrong account. Switch to ${C.OWNER}.</span>`):'Not connected.';
@@ -42,7 +49,7 @@ function render(){
   return `<div class="card ${on||st.confirmed?'':'off'}"><h2>${s.title} ${st.confirmed?'<span class="ok">✓ confirmed</span>':''}</h2><table>
   <tr><td>Chain</td><td>${ch.name} (${ch.id})</td></tr><tr><td>Target</td><td class="mono">${s.to()?s.to():'(contract creation)'}</td></tr>
   <tr><td>Function</td><td>${esc(s.fn)}</td></tr><tr><td>From</td><td class="mono">${C.OWNER}</td></tr>
-  <tr><td>Simulation</td><td id="sim-${s.k}">${st.sim||'<span class="mut">runs when enabled</span>'}</td></tr></table>
+  ${s.k==='B2'?`<tr><td>Pre-check</td><td>${S.b2PreMsg||'…'}</td></tr>`:''}<tr><td>Simulation</td><td id="sim-${s.k}">${st.sim||'<span class="mut">runs when enabled</span>'}</td></tr></table>
   ${data?`<details><summary class="mut">Calldata (${(data.length-2)/2} bytes)</summary><div class="mono">${data.length>600?data.slice(0,300)+'…'+data.slice(-300):data}</div></details>`:''}
   ${st.hash?`<p>Tx: <a class="mono" target="_blank" href="${ch.exp}/tx/${st.hash}">${st.hash}</a> ${st.confirmed?'':'<span class="mut">(waiting for receipt…)</span>'}</p>`:''}
   ${s.k==='deploy'&&S.sink?`<p>Sink: <span class="mono">${S.sink}</span> <button class="sec" onclick="navigator.clipboard.writeText('${S.sink}')">Copy</button> <a target="_blank" href="${ch.exp}/address/${S.sink}">explorer</a><br>${S.sinkVerified?'<span class="ok">srcEid() == 30324 ✓</span>':'<span class="bad">srcEid not yet verified</span> <button class="sec" onclick="verifySink()">Verify</button>'}</p>`:''}
@@ -73,5 +80,5 @@ async function watch(i){const s=STEPS[i];const h=S[s.k].hash;for(let t=0;t<120;t
 async function verifySink(){try{const r=await rpc('arb','eth_call',[{to:S.sink,data:'0x479cca5e'},'latest']);S.sinkVerified=BigInt(r)===30324n;if(!S.sinkVerified)S.deploy={...S.deploy,err:'srcEid() returned '+BigInt(r)};}catch(e){S.deploy={...S.deploy,err:'srcEid check failed: '+e.message};}save();render();}
 $('btnConnect').onclick=connect;$('btnReset').onclick=()=>{if(confirm('Clear saved progress? (does not undo on-chain txs)')){S={};save();location.reload();}};
 if(eth){eth.on?.('accountsChanged',a=>{account=(a[0]||'').toLowerCase();render();});eth.request({method:'eth_accounts'}).then(a=>{account=(a[0]||'').toLowerCase()||null;render();});}
-render();STEPS.forEach((s,i)=>{if(S[s.k]?.hash&&!S[s.k].confirmed)watch(i);});
+render();preB2();STEPS.forEach((s,i)=>{if(S[s.k]?.hash&&!S[s.k].confirmed)watch(i);});
 </script></body></html>
